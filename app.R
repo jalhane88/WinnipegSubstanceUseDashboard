@@ -11,6 +11,12 @@ app_data <- readRDS("data/app_data.rds")
 
 
 # ---- 2. Define User Interface (UI) ----
+
+# NEW: Let's prepare the choices for our dropdowns here for cleanliness
+neighbourhood_choices <- c("All Neighbourhoods", 
+                           sort(unique(na.omit(app_data$neighbourhood))))
+gender_choices <- c("All Genders", "Male", "Female")
+
 ui <- fluidPage(
   
   tags$head(
@@ -37,16 +43,31 @@ ui <- fluidPage(
   
   sidebarLayout(
     
+    # UPDATED: We are adding new controls to the sidebar
     sidebarPanel(
       h4("Filters"),
+      
       dateRangeInput(
         inputId = "date_range",
         label = "Filter by Incident Date:",
         start = min(app_data$dispatch_date, na.rm = TRUE),
-        end = max(app_data$dispatch_date, na.rm = TRUE),
-        min = min(app_data$dispatch_date, na.rm = TRUE),
-        max = max(app_data$dispatch_date, na.rm = TRUE)
+        end = max(app_data$dispatch_date, na.rm = TRUE)
+      ),
+      
+      # NEW: Dropdown menu for neighbourhood
+      selectInput(
+        inputId = "neighbourhood_filter",
+        label = "Filter by Neighbourhood:",
+        choices = neighbourhood_choices
+      ),
+      
+      # NEW: Radio buttons for gender
+      radioButtons(
+        inputId = "gender_filter",
+        label = "Filter by Gender:",
+        choices = gender_choices
       )
+      
     ),
     
     mainPanel(
@@ -62,27 +83,59 @@ ui <- fluidPage(
         )
       ),
       hr(),
+      # UPDATED: We'll put the two smaller plots side-by-side
       fluidRow(
-        column(width = 12,
+        column(width = 6,
                h3("Incidents by Day of the Week"),
                plotlyOutput("weekday_plot")
+        ),
+        column(width = 6,
+               h3("Top Substances Involved"),
+               plotlyOutput("substance_plot")
+        )
+      ),
+      # NEW: A new row for our population pyramid
+      hr(),
+      fluidRow(
+        column(width = 12,
+               h3("Demographic Breakdown by Age and Gender"),
+               plotlyOutput("pyramid_plot") # Placeholder for the new plot
         )
       )
     )
   )
 )
-
-
-# ---- 3. Define Server Logic ----
-server <- function(input, output) {
-  
-  filtered_data <- reactive({
-    app_data |>
-      filter(
-        dispatch_date >= input$date_range[1],
-        dispatch_date <= input$date_range[2]
-      )
-  })
+  # ---- 3. Define Server Logic ----
+  server <- function(input, output) {
+    
+    # UPDATED: Our central reactive now listens to the new inputs
+    filtered_data <- reactive({
+      
+      # Start with the full dataset
+      data <- app_data
+      
+      # 1. Filter by date range (this is the same as before)
+      data <- data |>
+        filter(
+          dispatch_date >= input$date_range[1],
+          dispatch_date <= input$date_range[2]
+        )
+      
+      # 2. Filter by neighbourhood, if a specific one is selected
+      if (input$neighbourhood_filter != "All Neighbourhoods") {
+        data <- data |>
+          filter(neighbourhood == input$neighbourhood_filter)
+      }
+      
+      # 3. Filter by gender, if a specific one is selected
+      if (input$gender_filter != "All Genders") {
+        data <- data |>
+          filter(gender == input$gender_filter)
+      }
+      
+      # Return the final, filtered data
+      data
+    })
   
   output$total_incidents <- renderUI({
     total <- n_distinct(filtered_data()$incident_number)
@@ -144,7 +197,68 @@ server <- function(input, output) {
     ggplotly(p)
   })
   
-}
+  # --- New plot for top substances involved ---
+  output$substance_plot <- renderPlotly({
+    
+    # Data wrangling to count individual substances
+    substance_counts <- filtered_data() |>
+      # 1. Drop rows where substances_involved is NA
+      filter(!is.na(substances_involved)) |>
+      # 2. Split the strings by "; "
+      separate_rows(substances_involved, sep = "; ") |>
+      # 3. Count each individual substance
+      count(substances_involved, sort = TRUE, name = "count") |>
+      # 4. Take the top 10
+      top_n(10, count)
+    
+    # Create the ggplot bar chart
+    p <- ggplot(substance_counts, aes(x = count, y = reorder(substances_involved, count), text = paste("Count:", count))) +
+      geom_col(fill = "#007bff") +
+      labs(x = "Total Count", y = NULL) + # No y-axis label needed
+      theme_minimal()
+    
+    # Convert to ggplotly
+    # We use tooltip = "text" to get a cleaner hover label
+    ggplotly(p, tooltip = "text")
+    
+  })
+  
+  # NEW: Code to render the population pyramid plot
+  output$pyramid_plot <- renderPlotly({
+    
+    # Data wrangling for the pyramid
+    pyramid_data <- filtered_data() |>
+      # 1. Keep only Male and Female, and ensure age is not NA
+      filter(gender %in% c("Male", "Female"), !is.na(age)) |>
+      # 2. Count incidents by age and gender
+      count(age, gender, name = "count") |>
+      # 3. The key trick: make male counts negative
+      mutate(
+        count = if_else(gender == "Male", -count, count)
+      )
+    
+    # Create the ggplot
+    p <- ggplot(pyramid_data, aes(x = count, y = age, fill = gender, text = paste("Count:", abs(count)))) +
+      geom_col() +
+      # Use a specific color palette
+      scale_fill_manual(values = c("Male" = "#007bff", "Female" = "#E13468")) +
+      labs(x = "Number of Incidents", y = "Age Group") +
+      # This is the trick to format the x-axis labels to be positive numbers
+      scale_x_continuous(labels = function(x) abs(x), breaks = pretty(pyramid_data$count)) +
+      theme_minimal() +
+      theme(legend.title = element_blank()) # Remove the legend title
+    
+    # Convert to ggplotly
+    ggplotly(p, tooltip = "text") |>
+      layout(
+        # This makes the hover labels look consistent
+        hovermode = "y unified"
+      )
+    
+  })
+  
+  }
+  
 
 
 # ---- 4. Run the Application ----
