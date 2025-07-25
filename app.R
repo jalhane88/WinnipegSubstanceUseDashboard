@@ -12,8 +12,22 @@ library(leaflet)
 app_data <- readRDS("data/app_data.rds")
 services_data <- read.csv("data/services.csv") # NEW: Load the services data
 
+# NEW: Define our color palette
+# Inspired by the BCCSU dashboard colors
+color_palette <- list(
+  primary_blue = "#007bff",
+  highlight_red = "#dc3545",
+  highlight_orange = "#fd7e14",
+  highlight_purple = "#6f42c1",
+  text_dark = "#343a40",
+  background_light = "#f8f9fa"
+)
 
 # ---- 2. Define User Interface (UI) ----
+
+# UPDATED: We'll prepare choices for ward instead of neighbourhood
+ward_choices <- c("All Wards", sort(unique(na.omit(app_data$ward))))
+gender_choices <- c("All Genders", "Male", "Female")
 
 # NEW: We are replacing fluidPage with navbarPage to create a multi-tab layout
 ui <- navbarPage(
@@ -37,10 +51,11 @@ ui <- navbarPage(
           start = min(app_data$dispatch_date, na.rm = TRUE),
           end = max(app_data$dispatch_date, na.rm = TRUE)
         ),
+        # UPDATED: Replaced neighbourhood with ward
         selectInput(
-          inputId = "neighbourhood_filter",
-          label = "Filter by Neighbourhood:",
-          choices = c("All Neighbourhoods", sort(unique(na.omit(app_data$neighbourhood))))
+          inputId = "ward_filter", # <-- Changed ID
+          label = "Filter by Ward:", # <-- Changed label
+          choices = ward_choices # <-- Using new choices
         ),
         radioButtons(
           inputId = "gender_filter",
@@ -48,21 +63,25 @@ ui <- navbarPage(
           choices = c("All Genders", "Male", "Female")
         )
       ),
+      # UPDATED: Main panel layout changes
       mainPanel(
-        # The main panel content is the same as before
         fluidRow(
-          column(width = 6, div(class = "value-box", h3("Total Incidents"), uiOutput("total_incidents"))),
-          column(width = 6, div(class = "value-box", h3("Total Naloxone Doses"), uiOutput("total_naloxone")))
+          # Using our new background color
+          column(width = 6, div(class = "value-box", style = paste0("background-color: ", color_palette$background_light, ";"), 
+                                h4("Total Incidents"), uiOutput("total_incidents"))),
+          column(width = 6, div(class = "value-box", style = paste0("background-color: ", color_palette$background_light, ";"), 
+                                h4("Total Naloxone Doses"), uiOutput("total_naloxone")))
         ),
-        hr(),
-        fluidRow(column(width = 12, h3("Incidents Over Time"), plotlyOutput("time_trend_plot"))),
-        hr(),
+        
+        # We removed the <hr/> lines for a tighter layout
+        fluidRow(column(width = 12, h4("Incidents Over Time"), plotlyOutput("time_trend_plot"))),
+        
         fluidRow(
-          column(width = 6, h3("Incidents by Day of the Week"), plotlyOutput("weekday_plot")),
-          column(width = 6, h3("Top Substances Involved"), plotlyOutput("substance_plot"))
+          column(width = 6, h4("Incidents by Day of the Week"), plotlyOutput("weekday_plot")),
+          column(width = 6, h4("Top Substances Involved"), plotlyOutput("substance_plot"))
         ),
-        hr(),
-        fluidRow(column(width = 12, h3("Demographic Breakdown by Age and Gender"), plotlyOutput("pyramid_plot")))
+        
+        fluidRow(column(width = 12, h4("Demographic Breakdown by Age and Gender"), plotlyOutput("pyramid_plot")))
       )
     )
   ),
@@ -90,11 +109,15 @@ server <- function(input, output) {
   # --- Reactive Data ---
   filtered_data <- reactive({
     data <- app_data
-    if (input$neighbourhood_filter != "All Neighbourhoods") {
-      data <- data |> filter(neighbourhood == input$neighbourhood_filter)
+    # UPDATED: Filter by ward now
+    if (input$ward_filter != "All Wards") { # <-- Changed input ID
+      data <- data |>
+        filter(ward == input$ward_filter) # <-- Changed column name
     }
+    # 3. Filter by gender, if a specific one is selected
     if (input$gender_filter != "All Genders") {
-      data <- data |> filter(gender == input_gender_filter)
+      data <- data |>
+        filter(gender == input$gender_filter) # <-- THIS IS THE CORRECTED LINE
     }
     data |>
       filter(
@@ -122,7 +145,7 @@ server <- function(input, output) {
       count(year_month) |>
       mutate(tooltip_text = paste("Month:", format(year_month, "%b %Y"), "<br>Incidents:", n))
     
-    plot_ly(data = trend_data, x = ~year_month, y = ~n, type = 'scatter', mode = 'lines', line = list(color = '#007bff'), hoverinfo = 'text', text = ~tooltip_text) |>
+    plot_ly(data = trend_data, x = ~year_month, y = ~n, type = 'scatter', mode = 'lines', line = list(color = color_palette$primary_blue), hoverinfo = 'text', text = ~tooltip_text) |>
       layout(xaxis = list(title = "Month"), yaxis = list(title = "Number of Incidents"))
   })
   
@@ -134,7 +157,7 @@ server <- function(input, output) {
       count(weekday)
     
     p <- ggplot(plot_data, aes(x = weekday, y = n)) +
-      geom_col(fill = "#007bff") +
+      geom_col(fill = color_palette$primary_blue) +
       labs(title = NULL, x = "Day of the Week", y = "Total Number of Incidents") +
       theme_minimal() +
       scale_y_continuous(labels = scales::comma) 
@@ -150,7 +173,7 @@ server <- function(input, output) {
       top_n(10, count)
     
     p <- ggplot(substance_counts, aes(x = count, y = reorder(substances_involved, count), text = paste("Count:", count))) +
-      geom_col(fill = "#007bff") +
+      geom_col(fill = color_palette$highlight_red) +
       labs(x = "Total Count", y = NULL) +
       theme_minimal()
     ggplotly(p, tooltip = "text")
@@ -165,7 +188,7 @@ server <- function(input, output) {
     
     p <- ggplot(pyramid_data, aes(x = count, y = age, fill = gender, text = paste("Count:", abs(count)))) +
       geom_col() +
-      scale_fill_manual(values = c("Male" = "#007bff", "Female" = "#E13468")) +
+      scale_fill_manual(values = c("Male" = color_palette$primary_blue, "Female" = color_palette$highlight_orange)) +
       labs(x = "Number of Incidents", y = "Age Group") +
       scale_x_continuous(labels = function(x) abs(x), breaks = pretty(pyramid_data$count)) +
       theme_minimal() +
@@ -191,4 +214,3 @@ server <- function(input, output) {
 
 # ---- 4. Run the Application ----
 shinyApp(ui = ui, server = server)
-# Note: The services map tab is currently a placeholder. We will add the map functionality in the next steps.
